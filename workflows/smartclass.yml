@@ -1,0 +1,514 @@
+name: Git Quest — итоговая проверка
+on:
+  workflow_dispatch: null
+jobs:
+  final-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить репозиторий
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Определить персональный вариант
+        shell: bash
+        run: |
+          USERNAME="${{ gitverse.actor }}"
+
+          echo "Пользователь: $USERNAME"
+          echo "Ветка: ${{ gitverse.ref_name }}"
+
+          if [ "${{ gitverse.ref_name }}" = "main" ] || \
+             [ "${{ gitverse.ref_name }}" = "master" ]; then
+            echo ""
+            echo "✗ Итоговую проверку нужно запускать"
+            echo "  для вашей рабочей ветки, а не для main/master."
+            exit 1
+          fi
+
+          python3 scripts/quest_variant.py "$USERNAME" > /tmp/variant.json
+
+          echo ""
+          echo "Персональный вариант определён."
+      - name: Проверить итоговое состояние проекта
+        shell: bash
+        run: >
+          set +e
+
+          ERRORS=0
+
+
+          echo ""
+
+          echo "========================================"
+
+          echo "        ИТОГОВАЯ ПРОВЕРКА КВЕСТА"
+
+          echo "========================================"
+
+          echo ""
+
+
+          SOURCE_FILE=$(
+            python3 -c \
+            "import json; print(json.load(open('/tmp/variant.json'))['step4']['source_file'])"
+          )
+
+
+          DOCUMENT_FILE=$(
+            python3 -c \
+            "import json; print(json.load(open('/tmp/variant.json'))['step4']['document_file'])"
+          )
+
+
+          # -----------------------------------------------------
+
+          # .gitignore
+
+          # -----------------------------------------------------
+
+
+          echo "Проверяем .gitignore:"
+
+
+          if [ ! -f ".gitignore" ]; then
+            echo "✗ .gitignore отсутствует"
+            ERRORS=$((ERRORS + 1))
+          else
+            tr -d '\r' < .gitignore > /tmp/gitignore_normalized
+
+            python3 - <<'PY' > /tmp/gitignore_expected
+          import json
+
+          with open("/tmp/variant.json", encoding="utf-8") as f:
+              variant = json.load(f)
+          for rule in variant["gitignore"]:
+              print(rule)
+          PY
+
+            while IFS= read -r RULE; do
+              if grep -Fxq "$RULE" /tmp/gitignore_normalized; then
+                echo "✓ правило найдено: $RULE"
+              else
+                echo "✗ отсутствует обязательное правило: $RULE"
+                ERRORS=$((ERRORS + 1))
+              fi
+            done < /tmp/gitignore_expected
+
+            if grep -Fxq ".env" /tmp/gitignore_normalized; then
+              echo "✓ .env добавлен в .gitignore"
+            else
+              echo "✗ .env не добавлен в .gitignore"
+              ERRORS=$((ERRORS + 1))
+            fi
+          fi
+
+
+          # -----------------------------------------------------
+
+          # .env / env_example
+
+          # -----------------------------------------------------
+
+
+          echo ""
+
+          echo "Проверяем конфигурацию:"
+
+
+          if [ -e ".env" ]; then
+            echo "✗ .env всё ещё находится в рабочей версии проекта"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ .env отсутствует в рабочей версии"
+          fi
+
+
+          if [ ! -f "env_example" ]; then
+            echo "✗ env_example отсутствует"
+            ERRORS=$((ERRORS + 1))
+          else
+            tr -d '\r' < env_example > /tmp/env_example_normalized
+
+            python3 - <<'PY' > /tmp/env_keys
+          import json
+
+          with open("/tmp/variant.json", encoding="utf-8") as f:
+              variant = json.load(f)
+          for key in variant["env"]:
+              print(key)
+          PY
+
+            while IFS= read -r KEY; do
+              if grep -Fxq "${KEY}=" /tmp/env_example_normalized; then
+                echo "✓ переменная описана: $KEY"
+              else
+                echo "✗ env_example должен содержать строку ${KEY}="
+                ERRORS=$((ERRORS + 1))
+              fi
+            done < /tmp/env_keys
+          fi
+
+
+          # -----------------------------------------------------
+
+          # Исходный код
+
+          # -----------------------------------------------------
+
+
+          echo ""
+
+          echo "Проверяем исходный код:"
+
+
+          if [ ! -f "$SOURCE_FILE" ]; then
+            echo "✗ не найден $SOURCE_FILE"
+            ERRORS=$((ERRORS + 1))
+          elif [ ! -s "$SOURCE_FILE" ]; then
+            echo "✗ $SOURCE_FILE пустой"
+            ERRORS=$((ERRORS + 1))
+          elif python3 "$SOURCE_FILE"; then
+            echo "✓ $SOURCE_FILE существует и запускается"
+          else
+            echo "✗ $SOURCE_FILE завершается с ошибкой"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+
+          # -----------------------------------------------------
+
+          # Документ
+
+          # -----------------------------------------------------
+
+
+          echo ""
+
+          echo "Проверяем документацию:"
+
+
+          if [ ! -f "$DOCUMENT_FILE" ]; then
+            echo "✗ не найден $DOCUMENT_FILE"
+            ERRORS=$((ERRORS + 1))
+          elif [ ! -s "$DOCUMENT_FILE" ]; then
+            echo "✗ $DOCUMENT_FILE пустой"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ документ проекта найден"
+          fi
+
+
+          # -----------------------------------------------------
+
+          # README
+
+          # -----------------------------------------------------
+
+
+          echo ""
+
+          echo "Проверяем README:"
+
+
+          if [ ! -f "README.md" ]; then
+            echo "✗ README.md отсутствует"
+            ERRORS=$((ERRORS + 1))
+          elif [ ! -s "README.md" ]; then
+            echo "✗ README.md пустой"
+            ERRORS=$((ERRORS + 1))
+          else
+            tr -d '\r' < README.md > /tmp/readme_normalized
+
+            README_SIZE=$(wc -c < /tmp/readme_normalized)
+
+            if [ "$README_SIZE" -lt 300 ]; then
+              echo "✗ README слишком короткий: $README_SIZE символов"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "✓ README содержит достаточно информации"
+            fi
+
+            python3 - <<'PY' > /tmp/readme_keywords
+          import json
+
+          with open("/tmp/variant.json", encoding="utf-8") as f:
+              variant = json.load(f)
+          for keyword in variant["step5"]["keywords"]:
+              print(keyword)
+          PY
+
+            KEYWORD_NUMBER=0
+            while IFS= read -r KEYWORD; do
+              KEYWORD_NUMBER=$((KEYWORD_NUMBER + 1))
+
+              if grep -Fqi "$KEYWORD" /tmp/readme_normalized; then
+                echo "✓ технология проекта №$KEYWORD_NUMBER описана"
+              else
+                echo "✗ технология проекта №$KEYWORD_NUMBER не найдена"
+                ERRORS=$((ERRORS + 1))
+              fi
+            done < /tmp/readme_keywords
+
+            if grep -Fqi "$SOURCE_FILE" /tmp/readme_normalized; then
+              echo "✓ исходный файл указан в README"
+            else
+              echo "✗ README не содержит путь $SOURCE_FILE"
+              ERRORS=$((ERRORS + 1))
+            fi
+
+            if grep -Fqi "$DOCUMENT_FILE" /tmp/readme_normalized; then
+              echo "✓ документ указан в README"
+            else
+              echo "✗ README не содержит путь $DOCUMENT_FILE"
+              ERRORS=$((ERRORS + 1))
+            fi
+
+            if grep -Fqi "env_example" /tmp/readme_normalized; then
+              echo "✓ env_example описан"
+            else
+              echo "✗ README не упоминает env_example"
+              ERRORS=$((ERRORS + 1))
+            fi
+
+            SOURCE_BASENAME=$(basename "$SOURCE_FILE")
+
+            if grep -Eqi 'python|python3' /tmp/readme_normalized && \
+               grep -Fqi "$SOURCE_BASENAME" /tmp/readme_normalized; then
+              echo "✓ инструкция запуска найдена"
+            else
+              echo "✗ не найдена понятная инструкция запуска программы"
+              ERRORS=$((ERRORS + 1))
+            fi
+          fi
+
+
+          echo "$ERRORS" > /tmp/project_errors
+
+
+          if [ "$ERRORS" -eq 0 ]; then
+            echo ""
+            echo "✓ Итоговое состояние файлов корректно."
+          else
+            echo ""
+            echo "✗ Ошибок в состоянии проекта: $ERRORS"
+          fi
+
+
+          # Не завершаем job здесь:
+
+          # сначала всё равно проверим историю Git.
+
+          exit 0
+      - name: Проверить историю Git
+        shell: bash
+        run: |
+          set +e
+          ERRORS=0
+
+          echo ""
+          echo "========================================"
+          echo "            ИСТОРИЯ GIT"
+          echo "========================================"
+          echo ""
+
+          if git show-ref --verify --quiet refs/remotes/origin/main; then
+            BASE_BRANCH="origin/main"
+          elif git show-ref --verify --quiet refs/remotes/origin/master; then
+            BASE_BRANCH="origin/master"
+          else
+            echo "✗ Не удалось найти origin/main или origin/master"
+            echo "1" > /tmp/history_errors
+            exit 0
+          fi
+
+          BASE_COMMIT=$(git merge-base HEAD "$BASE_BRANCH")
+
+          echo "Основная ветка: $BASE_BRANCH"
+          echo "Точка начала работы: ${BASE_COMMIT:0:8}"
+          echo ""
+
+          # Только собственная история рабочей ветки.
+          # Merge-коммиты не считаем, коммиты Git Quest Bot
+          # исключаем отдельно.
+          git log --no-merges \
+            --format='%H%x09%an%x09%ae%x09%s' \
+            "${BASE_COMMIT}..HEAD" \
+            > /tmp/branch_commits.tsv
+
+          awk -F '\t' '
+            $2 != "Git Quest Bot" &&
+            $3 != "git-quest-bot@localhost"
+          ' /tmp/branch_commits.tsv > /tmp/student_commits.tsv
+
+          COMMIT_COUNT=$(wc -l < /tmp/student_commits.tsv)
+          COMMIT_COUNT=$(echo "$COMMIT_COUNT" | tr -d ' ')
+
+          MIN_COMMITS=8
+          MIN_MEANINGFUL=3
+
+          echo "Собственных коммитов в рабочей ветке: $COMMIT_COUNT"
+
+          if [ "$COMMIT_COUNT" -lt "$MIN_COMMITS" ]; then
+            echo "✗ Требуется минимум $MIN_COMMITS собственных коммитов."
+            echo "  Сейчас: $COMMIT_COUNT"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ Минимум $MIN_COMMITS собственных коммитов выполнен"
+          fi
+
+          echo ""
+          echo "Проверяем качество сообщений коммитов:"
+          echo ""
+
+          python3 - <<'PY'
+          import csv
+
+          meaningful = 0
+          not_meaningful = 0
+
+          generic_exact = {
+              "fix", "fixed", "test", "testing",
+              "update", "updated", "change", "changes",
+              "commit", "work", "done", "ok",
+              "aaa", "asdf", "qwerty",
+              "123", "1234", "test1", "test2",
+          }
+
+          # Стандартные сообщения веб-интерфейса GitVerse.
+          generic_prefixes = (
+              "create:",
+              "update:",
+              "delete:",
+          )
+
+          with open(
+              "/tmp/student_commits.tsv",
+              encoding="utf-8",
+              newline="",
+          ) as f:
+              reader = csv.reader(f, delimiter="\t")
+
+              for row in reader:
+                  if len(row) < 4:
+                      continue
+
+                  commit_hash = row[0]
+                  subject = "\t".join(row[3:]).strip()
+                  lower = subject.casefold()
+                  short_hash = commit_hash[:8]
+
+                  reasons = []
+
+                  if len(subject) < 10:
+                      reasons.append("слишком короткое")
+
+                  if lower in generic_exact:
+                      reasons.append("слишком общее")
+
+                  if lower.startswith(generic_prefixes):
+                      reasons.append(
+                          "стандартное сообщение GitVerse"
+                      )
+
+                  if not any(ch.isalpha() for ch in subject):
+                      reasons.append("не описывает изменение")
+
+                  if reasons:
+                      not_meaningful += 1
+                      print(
+                          f'○ {short_hash} — "{subject}" '
+                          f'— не засчитан как содержательный'
+                      )
+                  else:
+                      meaningful += 1
+                      print(
+                          f'✓ {short_hash} — "{subject}" '
+                          f'— содержательный'
+                      )
+
+          with open("/tmp/meaningful_commits", "w") as f:
+              f.write(str(meaningful))
+
+          with open("/tmp/nonmeaningful_commits", "w") as f:
+              f.write(str(not_meaningful))
+          PY
+
+          MEANINGFUL=$(cat /tmp/meaningful_commits)
+          NONMEANINGFUL=$(cat /tmp/nonmeaningful_commits)
+
+          echo ""
+          echo "Содержательных сообщений: $MEANINGFUL"
+          echo "Стандартных/неинформативных: $NONMEANINGFUL"
+          echo ""
+
+          if [ "$MEANINGFUL" -lt "$MIN_MEANINGFUL" ]; then
+            echo "✗ Требуется минимум $MIN_MEANINGFUL"
+            echo "  коммита с осмысленным описанием."
+            echo ""
+            echo "  Сейчас таких коммитов: $MEANINGFUL"
+            echo ""
+            echo "  Не переписывайте старые коммиты."
+            echo "  Продолжайте работу и используйте понятные"
+            echo "  описания в следующих коммитах."
+            echo ""
+            echo "  Например:"
+            echo "    Добавлен пример конфигурации приложения"
+            echo "    Настроено исключение временных файлов"
+            echo "    Описан запуск проекта"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✓ Минимум $MIN_MEANINGFUL содержательных"
+            echo "  сообщений выполнен"
+          fi
+
+          echo ""
+          echo "Примечание:"
+          echo "стандартные Create:/Update:/Delete: и короткие"
+          echo "сообщения остаются частью истории и учитываются"
+          echo "в общем количестве коммитов, но не входят"
+          echo "в число содержательных."
+
+          echo "$ERRORS" > /tmp/history_errors
+          exit 0
+      - name: Подвести итог
+        shell: bash
+        run: |
+          PROJECT_ERRORS=$(cat /tmp/project_errors 2>/dev/null || echo 1)
+          HISTORY_ERRORS=$(cat /tmp/history_errors 2>/dev/null || echo 1)
+
+          TOTAL_ERRORS=$((PROJECT_ERRORS + HISTORY_ERRORS))
+
+          echo ""
+          echo "========================================"
+
+          if [ "$TOTAL_ERRORS" -eq 0 ]; then
+            echo "           КВЕСТ ЗАВЕРШЁН 🎉"
+            echo "========================================"
+            echo ""
+            echo "✓ .gitignore"
+            echo "✓ env_example"
+            echo "✓ .env удалён из рабочей версии"
+            echo "✓ исходный код"
+            echo "✓ документация"
+            echo "✓ README"
+            echo "✓ технологии проекта"
+            echo "✓ структура репозитория"
+            echo "✓ история Git"
+            echo "✓ количество коммитов"
+            echo "✓ минимум 3 содержательных сообщения коммитов"
+            echo ""
+            echo "Все итоговые проверки пройдены."
+            exit 0
+          fi
+
+          echo "       ИТОГОВАЯ ПРОВЕРКА НЕ ПРОЙДЕНА"
+          echo "========================================"
+          echo ""
+          echo "Ошибок в проекте: $PROJECT_ERRORS"
+          echo "Ошибок в истории Git: $HISTORY_ERRORS"
+          echo ""
+          echo "Исправьте указанные выше проблемы,"
+          echo "отправьте изменения и запустите"
+          echo "итоговую проверку ещё раз."
+
+          exit 1
